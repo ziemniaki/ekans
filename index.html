@@ -95,28 +95,36 @@
   
   <script>
     window.onload = function() {
+      /********* CANVAS INITIALIZATION *********/
+      const canvas = document.getElementById("gameCanvas");
+      const ctx = canvas.getContext("2d");  // This initializes the canvas context
+      
       /********* GLOBAL VARIABLES *********/
       const gridSize = 20; // number of columns
-      // gridHeight will be gridSize for chess mode and gridSize*2 for train mode.
+      // gridHeight will be gridSize for chess mode, and gridSize*2 for train mode.
       let gridHeight = gridSize;
-      let fixedTick = 200; // initial tick time (ms) for chess mode
+      let fixedTick = 200; // initial tick time in ms for chess mode
       let cellSize = 400 / gridSize; // canvas width is fixed at 400 px
       
       let snake = [];      // each segment: {x, y, [color]}
-      let treats = [];     // each treat: {x, y, effect, symbol}  
-                           // Normal treat: effect === "none", symbol = ("♟️" for chess, "🍎" for train)
+      let treats = [];     // each treat: {x, y, effect, symbol}
+                           // For normal treats, effect === "none" and symbol = ("♟️" for chess, "🍎" for train)
       let startTime = null;
       let tickCount = 0;
       let treatsEaten = 0;
       let gameOver = false;
       let mode = null;     // "chess" or "train"
       
+      // Global variables for train mode board
+      let trainBoardColors = []; // 2D array for train mode board colors
+      let trainBoardBase;        // base color parameters for train mode
+      
       // For dynamic tick scheduling and tempo changes:
       let currentTickInterval = fixedTick;
       let tickTimeout = null;
       let lastMilestone = 0; // every 10 moves, increase tempo by 1%
       
-      // Treat timer: count steps without any normal treat on the board.
+      // Treat timer: count steps with no normal treat on the board.
       let stepsWithoutNormalTreat = 0;
       
       // Special effect counters (in ticks)
@@ -132,12 +140,10 @@
       const AudioContextClass = window.AudioContext || window.webkitAudioContext;
       const audioCtx = new AudioContextClass();
       if (audioCtx.state === 'suspended') {
-        document.addEventListener('click', () => {
-          if (audioCtx.state === 'suspended') audioCtx.resume();
-        });
+        document.addEventListener('click', () => { if (audioCtx.state === 'suspended') audioCtx.resume(); });
       }
       
-      // Map a grid cell (x,y) to a note in the C Lydian scale (cycle of 111 notes)
+      // Map a grid cell (x,y) to a pitch (C Lydian scale over a cycle of 111 notes)
       function getSquareFrequency(x, y) {
         let index = y * gridSize + x;
         const period = 111;
@@ -153,11 +159,11 @@
         let degree = noteNumber % 7;
         let octave = 2 + Math.floor(noteNumber / 7);
         let semitoneOffset = scale[degree] + 12 * (octave - 2);
-        let baseFreq = 65.41; // C2
+        let baseFreq = 65.41; // Frequency of C2
         return baseFreq * Math.pow(2, semitoneOffset / 12);
       }
       
-      // Scheduling functions for synth and hi-hat plucks.
+      // Scheduling functions for synth and hi-hat plucks
       function scheduleSynthPluck(freq, duration, startTimeScheduled) {
         let osc = audioCtx.createOscillator();
         let gain = audioCtx.createGain();
@@ -231,7 +237,7 @@
       }
       
       /********* SPECIAL TREAT SPAWNING *********/
-      // Return a random free (x,y) position (not occupied by snake or any treat).
+      // Returns a random free position (not occupied by snake or any treat).
       function getRandomFreePosition() {
         let freePositions = [];
         for (let x = 0; x < gridSize; x++) {
@@ -434,85 +440,6 @@
       }
       
       /********* GAME LOGIC *********/
-      // Returns true if the given cell is occupied by a snake segment.
-      function isCellInList(cell, list) {
-        return list.some(item => item.x === cell.x && item.y === cell.y);
-      }
-      
-      // A* pathfinding (using gridSize x gridHeight bounds)
-      function findPath(start, goal, snakeList) {
-        let obstacles = snakeList.slice(0, snakeList.length - 1)
-          .filter(cell => !(cell.x === goal.x && cell.y === goal.y));
-        let openSet = [];
-        let closedSet = [];
-        let startNode = { x: start.x, y: start.y, g: 0, h: heuristic(start, goal), f: heuristic(start, goal), parent: null };
-        openSet.push(startNode);
-        while (openSet.length > 0) {
-          let currentIndex = 0;
-          for (let i = 1; i < openSet.length; i++) {
-            if (openSet[i].f < openSet[currentIndex].f) {
-              currentIndex = i;
-            }
-          }
-          let current = openSet.splice(currentIndex, 1)[0];
-          closedSet.push(current);
-          if (current.x === goal.x && current.y === goal.y) {
-            let path = [];
-            let temp = current;
-            while (temp) {
-              path.push({ x: temp.x, y: temp.y });
-              temp = temp.parent;
-            }
-            path.reverse();
-            return path;
-          }
-          let neighbors = [
-            { x: current.x, y: current.y - 1 },
-            { x: current.x, y: current.y + 1 },
-            { x: current.x - 1, y: current.y },
-            { x: current.x + 1, y: current.y }
-          ];
-          for (let neighbor of neighbors) {
-            if (neighbor.x < 0 || neighbor.x >= gridSize || neighbor.y < 0 || neighbor.y >= gridHeight) continue;
-            if (isCellInList(neighbor, obstacles)) continue;
-            if (closedSet.find(n => n.x === neighbor.x && n.y === neighbor.y)) continue;
-            let tentativeG = current.g + 1;
-            let openNode = openSet.find(n => n.x === neighbor.x && n.y === neighbor.y);
-            if (!openNode) {
-              openSet.push({ x: neighbor.x, y: neighbor.y, g: tentativeG, h: heuristic(neighbor, goal), f: tentativeG + heuristic(neighbor, goal), parent: current });
-            } else if (tentativeG < openNode.g) {
-              openNode.g = tentativeG;
-              openNode.f = tentativeG + openNode.h;
-              openNode.parent = current;
-            }
-          }
-        }
-        return null;
-      }
-      
-      function heuristic(a, b) {
-        return Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
-      }
-      
-      // Fallback move.
-      function chooseFallback(current, snakeList) {
-        const directions = [
-          { x: 0, y: -1 },
-          { x: 1, y: 0 },
-          { x: 0, y: 1 },
-          { x: -1, y: 0 }
-        ];
-        let obstacles = snakeList.slice(0, snakeList.length - 1);
-        if (mode === "train") directions.sort(() => Math.random() - 0.5);
-        for (let dir of directions) {
-          let next = { x: current.x + dir.x, y: current.y + dir.y };
-          if (next.x < 0 || next.x >= gridSize || next.y < 0 || next.y >= gridHeight) continue;
-          if (!isCellInList(next, obstacles)) return next;
-        }
-        return null;
-      }
-      
-      /********* GAME TICK *********/
       function gameTick() {
         if (gameOver) return;
       
@@ -521,7 +448,7 @@
         if (clownEffectCounter > 0) clownEffectCounter--;
         if (halloweenEffectCounter > 0) halloweenEffectCounter--;
       
-        // Special treat timer: if there is no normal treat (effect === "none") on the board, increment counter.
+        // Special treat timer: if no normal treat (effect "none") exists, count steps.
         let normalTreats = treats.filter(t => t.effect === "none");
         if (normalTreats.length === 0) {
           stepsWithoutNormalTreat++;
@@ -533,7 +460,7 @@
           stepsWithoutNormalTreat = 0;
         }
       
-        // Target selection: if there are 10 or more special treats, pick one at random; otherwise, prefer a normal treat.
+        // Target selection: if 10+ special treats exist, pick one at random; otherwise, prefer a normal treat.
         let target = null;
         let specialTreats = treats.filter(t => t.effect !== "none");
         if (specialTreats.length >= 10) {
@@ -627,6 +554,7 @@
           lastMilestone = tickCount;
         }
       
+        tickCount++;
         updateStats();
         draw();
       }
